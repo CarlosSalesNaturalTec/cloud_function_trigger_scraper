@@ -7,6 +7,7 @@ import functions_framework
 import google.auth
 import google.auth.transport.requests
 import requests
+from google.oauth2 import id_token
 from cloudevents.http import CloudEvent
 import firebase_admin
 from firebase_admin import credentials, firestore
@@ -32,10 +33,10 @@ if not SCRAPER_SERVICE_URL:
 def get_auth_token():
     """Obtém um token de identidade do Google para invocar serviços do Cloud Run."""
     try:
-        creds, project = google.auth.default()
         auth_req = google.auth.transport.requests.Request()
-        # O 'audience' deve ser a URL do serviço que você está invocando.
-        token = google.auth.jwt.encode(auth_req, SCRAPER_SERVICE_URL)
+        # O fetch_id_token é o método recomendado para obter um token de identidade
+        # para um 'audience' (serviço alvo) específico.
+        token = id_token.fetch_id_token(auth_req, SCRAPER_SERVICE_URL)
         return token
     except Exception as e:
         logging.error(f"Erro ao gerar o token de autenticação: {e}")

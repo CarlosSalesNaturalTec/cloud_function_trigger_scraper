@@ -1,0 +1,21 @@
+# Arquivo de configuração para o gcloud ignore.
+#
+# Este arquivo é usado para especificar arquivos a serem ignorados pelo gcloud
+# ao implantar ou interagir com o projeto.
+#
+# Para mais informações, consulte: gcloud topic gcloudignore
+
+.gcloudignore
+.git
+.gitignore
+
+# Ambiente virtual do Python
+venv/
+*.pyc
+__pycache__/
+.tox/
+.venv/
+lib/
+include/
+bin/
+pip-selfcheck.json

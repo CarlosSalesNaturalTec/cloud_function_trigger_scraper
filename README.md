@@ -11,13 +11,13 @@ Este componente substitui a necessidade de um Cloud Scheduler que varria a cole�
 
 ## 2. Detalhes Técnicos / Pilha Tecnológica
 
--   **Ambiente de Execução:** Google Cloud Functions (2ª geração)
--   **Runtime:** Python 3.11+
+-   **Ambiente de Execução:** Google Cloud Functions (1ª geração)
+-   **Runtime:** Python 3.12+
 -   **Framework:** [Google Cloud Functions Framework](https://github.com/GoogleCloudPlatform/functions-framework-python)
 -   **Dependências Principais:**
     -   `functions-framework`: Para o boilerplate e execução da função.
     -   `requests`: Para realizar chamadas HTTP para o serviço de scraping.
-    -   `google-auth`: Para gerar um token de identidade (ID Token) e autenticar a chamada para o serviço `scraper_newspaper3k`, que é um serviço privado no Cloud Run.
+    -   `google-auth` e `google-oauth2`: Para gerar um token de identidade (ID Token) e autenticar a chamada para o serviço `scraper_newspaper3k`, que é um serviço privado no Cloud Run.
     -   `firebase-admin`: Para se conectar ao Firestore e escrever na coleção `system_logs`.
 
 ---
@@ -25,8 +25,8 @@ Este componente substitui a necessidade de um Cloud Scheduler que varria a cole�
 
 ## 3. Gatilho (Trigger)
 
--   **Tipo:** Firestore Trigger
--   **Evento:** `google.firestore.document.v1.created`
+-   **Tipo:** Firestore Trigger (Nativo de 1ª Geração)
+-   **Evento:** `providers/cloud.firestore/eventTypes/document.create`
 -   **Recurso:** `projects/{project_id}/databases/(default)/documents/monitor_results/{doc_id}`
 
 Isso significa que a função é executada automaticamente sempre que um novo documento é adicionado à coleção `monitor_results`.
@@ -50,7 +50,7 @@ Para operar corretamente, a função requer a seguinte variável de ambiente:
 1.  A função é ativada por um evento de criação de documento no Firestore.
 2.  Ela extrai o `doc_id` do documento recém-criado a partir dos metadados do evento.
 3.  Um novo documento é criado na coleção `system_logs` com o status `processing` para registrar o início da execução.
-4.  Utilizando a biblioteca `google-auth`, a função obtém as credenciais do ambiente de execução e gera um **ID Token** JWT. A audiência (`aud`) deste token é definida como a `SCRAPER_SERVICE_URL`, autorizando a função a invocar especificamente aquele serviço.
+4.  Utilizando a biblioteca `google-oauth2`, a função obtém as credenciais do ambiente de execução e gera um **ID Token** JWT. A audiência (`aud`) deste token é definida como a `SCRAPER_SERVICE_URL`, autorizando a função a invocar especificamente aquele serviço.
 5.  A função monta a URL do endpoint alvo: `{SCRAPER_SERVICE_URL}/scrape/by-doc-id/{doc_id}`.
 6.  Uma requisição `POST` é enviada para a URL alvo, com o ID Token no cabeçalho `Authorization: Bearer <token>`.
 7.  Em caso de sucesso, o documento de log em `system_logs` é atualizado para `success`.
@@ -93,48 +93,39 @@ A conta de serviço associada a esta Cloud Function precisa ter as seguintes per
 
 ## 8. Relação com Outros Módulos
 
--   **Origem do Evento:** A função é acionada por documentos criados pelo `search_google_cse` na coleção `monitor_results`.
+-   **Origem do Evento:** A função é acionada por documentos criados pelo `backend` na coleção `monitor_results`.
 -   **Destino da Ação:** A função invoca o endpoint `POST /scrape/by-doc-id/{doc_id}` no serviço `scraper_newspaper3k`.
 -   **Próximo Passo na Pipeline:** Após o `scraper_newspaper3k` concluir seu trabalho e atualizar o status do documento para `scraper_ok`, a Cloud Function `trigger-nlp-web` será acionada.
 
 ---
 
+## 9. Notas de Implementação e Histórico
 
-## 9. Exemplo de Comando de Deploy
+Durante a implementação inicial, foram encontrados os seguintes problemas e aplicadas as seguintes soluções:
+
+1.  **Problema:** O gatilho do Firestore para a Cloud Function de 2ª Geração (baseado em Eventarc) não era acionado, apesar de todas as configurações e permissões estarem corretas. A falha era silenciosa, sem erros nos logs.
+2.  **Solução:** A função de 2ª Geração foi substituída por uma de 1ª Geração (`trigger-scraper-v1`), que utiliza um mecanismo de gatilho nativo e mais direto com o Firestore. Esta abordagem contornou a falha do Eventarc e o gatilho passou a funcionar.
+
+3.  **Problema:** Após a ativação do gatilho, a função falhava ao tentar gerar o token de autenticação para invocar o serviço de scraper, com o erro `'Request' object has no attribute 'key_id'`.
+4.  **Solução:** O código de geração de token foi refatorado para usar o método `google.oauth2.id_token.fetch_id_token`, que é a abordagem recomendada e mais robusta para este ambiente, resolvendo o problema de autenticação.
+
+A versão estável e em produção utiliza a função de 1ª Geração `trigger-scraper-v1`.
 
 ---
 
-## 9. Exemplo de Comando de Deploy
+## 10. Exemplo de Comando de Deploy (1ª Geração)
 
-Execute o comando apropriado para o seu ambiente de shell a partir da raiz do diretório deste módulo. Lembre-se de substituir `"URL_DO_SEU_SERVICO_SCRAPER"` pela URL real do seu serviço no Cloud Run.
-
-### 9.1. Windows (cmd.exe)
-
-```cmd
-gcloud functions deploy trigger-scraper ^
-  --gen2 ^
-  --runtime=python311 ^
-  --region=us-central1 ^
-  --source=. ^
-  --entry-point=trigger_scraper ^
-  --trigger-event-filters="type=google.cloud.firestore.document.v1.created" ^
-  --trigger-event-filters="database=(default)" ^
-  --trigger-event-filters="document=monitor_results/{doc_id}" ^
-  --set-env-vars SCRAPER_SERVICE_URL="URL_DO_SEU_SERVICO_SCRAPER"
-```
-
-### 9.2. Linux / macOS / Cloud Shell (bash)
+Execute o comando a partir da raiz do projeto. Lembre-se de substituir `"URL_DO_SEU_SERVICO_SCRAPER"` pela URL real do seu serviço no Cloud Run.
 
 ```bash
-gcloud functions deploy trigger-scraper \
-  --gen2 \
-  --runtime=python311 \
-  --region=us-central1 \
-  --source=. \
+gcloud functions deploy trigger-scraper-v1 \
+  --no-gen2 \
+  --runtime=python312 \
+  --trigger-event="providers/cloud.firestore/eventTypes/document.create" \
+  --trigger-resource="projects/monitora-parlamentar-elmar/databases/(default)/documents/monitor_results/{docId}" \
+  --source=cloud_function_trigger_scraper \
   --entry-point=trigger_scraper \
-  --trigger-event-filters="type=google.cloud.firestore.document.v1.created" \
-  --trigger-event-filters="database=(default)" \
-  --trigger-event-filters="document=monitor_results/{doc_id}" \
+  --region=us-central1 \
   --set-env-vars SCRAPER_SERVICE_URL="URL_DO_SEU_SERVICO_SCRAPER"
 ```
 
